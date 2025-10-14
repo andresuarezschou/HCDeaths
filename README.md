@@ -19,7 +19,7 @@ You can reset the toast or log position by holding ctrl and shift and right clic
 - /hcd reset - reset settings
 
 ## Screenshots:
-![Uploading Screenshot from 2025-10-14 16-55-14.png…]()
+
 
 ## Death Logs:
 
