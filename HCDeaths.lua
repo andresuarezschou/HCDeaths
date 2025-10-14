@@ -1,3 +1,4 @@
+
 HCDeath = {}
 
 local HCDeath_Handler = CreateFrame("Frame")
@@ -198,6 +199,19 @@ do
 	HCDeathsToast:SetHeight(theight)
 	HCDeathsToast:Hide()
 
+  HCDeathsToast.ClearButton = CreateFrame("Button", nil, HCDeathsToast, "UIPanelButtonTemplate")
+  
+  HCDeathsToast.ClearButton:SetWidth(24)
+  HCDeathsToast.ClearButton:SetHeight(24)
+  HCDeathsToast.ClearButton:SetPoint("TOPRIGHT", HCDeathsToast, "TOPRIGHT", -5, -5)
+
+  HCDeathsToast.ClearButton:SetText("X") 
+  HCDeathsToast.ClearButton:GetFontString():SetTextColor(1, 0, 0, 1)
+
+  HCDeathsToast.ClearButton:SetScript("OnClick", function(self)
+        HCDeath:hideToast() 
+    end)
+
 	-- texture
 	HCDeath.texture = HCDeathsToast:CreateTexture(nil,"LOW")
 	HCDeath.texture:SetAllPoints(HCDeathsToast)
@@ -294,13 +308,15 @@ masterTimer:SetScript("OnUpdate", function(self, elapsed)
     if not self then return end
     
     -- 1. FAST TOAST DECAY (Runs every frame if active)
-    if self.toastActive then
-        self.toastEndTime = (self.toastEndTime or 0) - elapsed
+    if masterTimer.toastActive then
+        masterTimer.toastEndTime = (masterTimer.toastEndTime or 0) - elapsed
         
-        if self.toastEndTime <= 0 then
+        if masterTimer.toastEndTime <= 0 then
             -- This must execute to hide the toast and clear the lock
             HCDeath:print("Timer expired. Hiding toast.")
-            HCDeath:hideToast() 
+            HCDeath:hideToast()
+
+            masterTimer.toastActive = nil
         end
     end
     
@@ -710,14 +726,24 @@ function HCDeath:test(dtype, player, plevel, killer)
 end
 
 local HookChatFrame_OnEvent = ChatFrame_OnEvent
-function ChatFrame_OnEvent(event)
+function ChatFrame_OnEvent(event, arg1)
 	if (event == "CHAT_MSG_SYSTEM") then
 		if testmsg then
 			arg1 = testmsg
 			testmsg = nil
 		end
-
-		-- Examples of Turtle WoW HC progress messages:
+        local message = tostring(arg1) or ""
+        local rateLimitMsg = "You have performed that action too many times."
+        local generalFailMsg = "You cannot do that right now." 
+        
+        if message == rateLimitMsg or message == generalFailMsg then
+            -- This clears the permanent lock when the rate limit is hit
+            queried = nil 
+            masterTimer.queryTime = 0 
+            HCDeath:print("Query rate limit hit. Advancing queue.")
+        end
+      
+    -- Examples of Turtle WoW HC progress messages:
 		-- "PLAYERNAME has reached level 20/30/40/50 in Hardcore mode! Their ascendance towards immortality continues, however, so do the dangers they will face.
 		-- "PLAYERNAME has transcended death and reached level 60 on Hardcore mode without dying once! PLAYERNAME shall henceforth be known as the Immortal!"
 
@@ -736,17 +762,17 @@ function ChatFrame_OnEvent(event)
 		-- [PLAYERNAME]: Level PLAYERLEVEL PLAYERRACE PLAYERCLASS <PLAYERGUILD> - AREA
 		-- 1 player Total
 
-		local _, _, hcprogress = string.find(arg1, "(%a+) has reached level (%d%d) in Hardcore mode")
-		local _, _, hcimmortal = string.find(arg1, "(%a+) has transcended death and reached level 60")
-		local _, _, hcdeath = string.find(arg1,"A tragedy has occurred. Hardcore character (%a+)")
-		local _, _, infstart = string.find(arg1,"(%a+) has begun the Inferno Challenge")
+		local _, _, hcprogress = string.find(message, "(%a+) has reached level (%d%d) in Hardcore mode")
+		local _, _, hcimmortal = string.find(message, "(%a+) has transcended death and reached level 60")
+		local _, _, hcdeath = string.find(message,"A tragedy has occurred. Hardcore character (%a+)")
+		local _, _, infstart = string.find(message,"(%a+) has begun the Inferno Challenge")
 		-- local _, _, infdeath = string.find(arg1,"A tragedy has occurred. Inferno character (%a+)")
 
 		if hcprogress or hcimmortal then
 			HCDeath:systemMessage(arg1)
 			
-			local _, _, playerName = string.find(arg1,"(%a+) has")
-			local _, _, playerLevel = string.find(arg1,"reached level (%d+)")
+			local _, _, playerName = string.find(message,"(%a+) has")
+			local _, _, playerLevel = string.find(message,"reached level (%d+)")
 
 			table.insert(deaths, {
 				sdate = date("!%Y/%m/%d"),
@@ -767,7 +793,7 @@ function ChatFrame_OnEvent(event)
 		elseif infstart then
 			HCDeath:systemMessage(arg1)
 			
-			local _, _, playerName = string.find(arg1,"(%a+) has")
+			local _, _, playerName = string.find(message,"(%a+) has")
 
 			table.insert(deaths, {
 				sdate = date("!%Y/%m/%d"),
@@ -797,21 +823,21 @@ function ChatFrame_OnEvent(event)
 			-- end			
 
 			local pvp, natural, playerLevel, deathType, killerName, killerLevel, killerClass
-			_, _, pvp = string.find(arg1,"(PvP)")
-			_, _, natural = string.find(arg1,"(natural causes)")
-			_, _, playerLevel = string.find(arg1,"at level (%d+)")
+			_, _, pvp = string.find(message,"(PvP)")
+			_, _, natural = string.find(message,"(natural causes)")
+			_, _, playerLevel = string.find(message,"at level (%d+)")
 
 			if pvp then 
 				deathType = "PVP"
-				_, _, killerName = string.find(arg1,"to%s+(%a+)")
+				_, _, killerName = string.find(message,"to%s+(%a+)")
 			else
 				deathType = "PVE"
 				if natural then
 					killerName = "Natural Causes"
 					killerClass = "ENV"
 				else
-					_, _, killerName = string.find(arg1,"to%s+(.-)%s*%(")
-					_, _, killerLevel = string.find(arg1,"%(level%s*(.-)%).-at")
+					_, _, killerName = string.find(message,"to%s+(.-)%s*%(")
+					_, _, killerLevel = string.find(message,"%(level%s*(.-)%).-at")
 					killerClass = "NPC"
 				end
 			end
@@ -842,9 +868,9 @@ function ChatFrame_OnEvent(event)
 		
 		if queried then
 			local result
-			_, _, result = string.find(arg1,"(%d+) player.- total")
+			_, _, result = string.find(message,"(%d+) player.- total")
 			if not result then
-				_, _, result = string.find(arg1, "%[(.-)%]")
+				_, _, result = string.find(message, "%[(.-)%]")
 				for _, hcdeath in pairs(deaths) do
 					if (result == hcdeath.playerName) or (result == hcdeath.killerName) then
 						break
@@ -867,11 +893,12 @@ function ChatFrame_OnEvent(event)
 				end
 			end
 		end
+   
 	elseif (event == "CHAT_MSG_SAY" or event == "CHAT_MSG_YELL" or event == "CHAT_MSG_GUILD" or event == "CHAT_MSG_PARTY" or event == "CHAT_MSG_RAID" or event == "CHAT_MSG_RAID_LEADER") then
-		HCDeaths_LastWords[arg2] = HCDeath:extractLinks(arg1)
+		HCDeaths_LastWords[arg2] = HCDeath:extractLinks(tostring(arg1) or "")
 	end
 
-	HookChatFrame_OnEvent(event)
+	HookChatFrame_OnEvent(event, arg1)
 end
 
 function HCDeath:reset()
