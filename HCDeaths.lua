@@ -1,8 +1,6 @@
-local turtle = (TargetHPText or TargetHPPercText)
-if not turtle then
-		HCDeath:print("This addon will only function correctly for Turtle WoW.")
-    return
-end
+HCDeath = {}
+
+local HCDeath_Handler = CreateFrame("Frame")
 
 HCDeaths_Settings = {
 	message = true,
@@ -10,7 +8,7 @@ HCDeaths_Settings = {
 	toast = true,
 	color = false,
 	deathsound = true,
-	levelsound = true,
+	levelsound = false,
 	roar = false,
 	toastscale = 1,
 	logscale = 1,
@@ -177,12 +175,16 @@ local instances = {
 	"Zul'Gurub",
 }
 
-local HCDeath = CreateFrame("Frame", nil, UIParent)
 HCDeaths = {}
 HCDeaths_LastWords = {}
 
+
+masterTimer = CreateFrame("Frame", "HCDeathsMasterTimer", nil)
+HCDeathsToast = CreateFrame("Button", "HCDeathsToast", UIParent)
+HCDeathsLog = CreateFrame("Button", "HCDeathsLog", UIParent)
+
 local media = "Interface\\Addons\\HCDeaths\\media\\"
-local deaths = {}
+deaths = {}
 local queried
 local logged
 local toastMove -- state of toast moving
@@ -191,7 +193,7 @@ local twidth, theight = 332.8, 166.4
 
 do	
 	-- toast
-	HCDeathsToast = CreateFrame("Button", "HCDeathsToast", HCDeath)
+	
 	HCDeathsToast:SetWidth(twidth)
 	HCDeathsToast:SetHeight(theight)
 	HCDeathsToast:Hide()
@@ -281,15 +283,65 @@ do
 	end)
 end
 
-local timer = CreateFrame("Frame", nil, HCDeath)
-timer:Hide()
-timer:SetScript("OnUpdate", function()
-	if GetTime() >= this.time then
-		this.time = nil
-		HCDeath:hideToast()
-		this:Hide()
-		HCDeath:Toast()
-	end
+-- MASTER TIMER BLOCK 
+local masterTimer = masterTimer -- Re-use the alias
+
+-- ...-- These local variables can stay, as they are constants:
+local checkInterval = 1.0  -- Check logic every 1.0 seconds
+local queryTimeout = 8.0   -- Safe timeout for the /who query
+
+masterTimer:SetScript("OnUpdate", function(self, elapsed)
+    if not self then return end
+    
+    -- 1. FAST TOAST DECAY (Runs every frame if active)
+    if self.toastActive then
+        self.toastEndTime = (self.toastEndTime or 0) - elapsed
+        
+        if self.toastEndTime <= 0 then
+            -- This must execute to hide the toast and clear the lock
+            HCDeath:print("Timer expired. Hiding toast.")
+            HCDeath:hideToast() 
+        end
+    end
+    
+    -- 2. SLOW ACCUMULATOR & QUERY CHECK (Runs every 1.0 seconds)
+    self.accumulatedTime = (self.accumulatedTime or 0) + (elapsed or 0)
+
+    if self.accumulatedTime >= checkInterval then
+        self.accumulatedTime = self.accumulatedTime - checkInterval
+
+        ---------------------------------------------------
+        -- QUERY TIMEOUT CHECK (Only runs every 1.0 second)
+        ---------------------------------------------------
+        if queried then
+            self.queryTime = (self.queryTime or 0) + checkInterval
+            
+            if self.queryTime >= queryTimeout then
+                HCDeath:print("Who query timed out after 8 seconds. Resetting lock and skipping player.")
+                
+                local timedOutPlayerName = self.currentlyQueryingPlayerName
+                if timedOutPlayerName then
+                    HCDeath:RemoveDeath(timedOutPlayerName)
+                end
+                
+                queried = nil
+                self.queryTime = 0
+                self.currentlyQueryingPlayerName = nil
+            end
+        else
+            self.queryTime = 0
+        end
+        
+        ---------------------------------------------------
+        -- QUEUE ADVANCE CHECK (Only runs every 1.0 second)
+        ---------------------------------------------------
+        -- This logic ensures the next death is processed immediately after the current toast clears.
+        if not self.toastActive and HCDeath:tableLength() > 0 then
+            if not queried then
+                HCDeath:SendWho()
+            end
+        end
+    end -- End of accumulatedTime check
 end)
 
 function HCDeath:classSize()
@@ -309,12 +361,13 @@ function HCDeath:showToast()
 	HCDeath:raceSize()
 	HCDeathsToast:Show()
 
-	timer.time = GetTime() + HCDeaths_Settings.toasttime
-	timer:Show()
+  masterTimer.toastEndTime = HCDeaths_Settings.toasttime
+  masterTimer.toastActive = true
 end
 
 function HCDeath:hideToast()
-	HCDeathsToast:Hide()
+  HCDeathsToast:StopMovingOrSizing()	
+  HCDeathsToast:Hide()
 
 	HCDeath.name:SetText("")
 	HCDeath.level:SetText("")
@@ -322,7 +375,7 @@ function HCDeath:hideToast()
 	HCDeath.location:SetText("")
 	HCDeath.death:SetText("")
 	HCDeath.lastwords:SetText("")
-	-- HCDeath.quote:SetText("")
+	masterTimer.toastActive = nil
 end
 
 function HCDeath:texColor(level)
@@ -380,9 +433,8 @@ function HCDeath:sound(deathType, playerRace, playerLevel)
 end
 
 function HCDeath:Toast()
-	if toastMove then return end
-	if HCDeaths_Settings.toast then
-		if not HCDeath.texture:IsVisible() then
+	if not HCDeaths_Settings.toast then return end --checking settings 1st
+    if masterTimer.toastActive then return end
 			for _, hcdeath in pairs(deaths) do
 				if hcdeath.info then
 					HCDeath:RemoveDeath(hcdeath.playerName)
@@ -451,11 +503,11 @@ function HCDeath:Toast()
 					if (hcdeath.deathType == "PVP" or hcdeath.deathType == "PVE") then
 						HCDeath:updateLog(true)
 					end
-					break
-				end
-			end			
-		end
-	end	
+
+          
+					break 
+        end
+    end      
 end
 
 function HCDeath:tableLength()
@@ -593,7 +645,12 @@ function HCDeath:SendWho()
 	if not queried then
 		for _, hcdeath in pairs(deaths) do
 			if not hcdeath.info then
-				HCDeath:whoPlayer(hcdeath.playerName, hcdeath.playerLevel)				
+        -- 🛑 NEW LINE HERE: Store the name for timeout tracking 🛑
+        masterTimer.currentlyQueryingPlayerName = hcdeath.playerName
+                
+        -- This function will now send the /who query and set 'queried = true'
+        HCDeath:whoPlayer(hcdeath.playerName, hcdeath.playerLevel)              
+                			
 				break
 			end
 		end
@@ -614,6 +671,9 @@ function HCDeath:whoPlayer(player, level, zone)
 	if filter then
 		SendWho(filter)
 		queried = true
+
+    -- RESET THE QUERY TIMER ON THE MASTER TIMER:
+    masterTimer.queryTime = 0
 	else
 		queried = nil
 	end
@@ -799,7 +859,10 @@ function ChatFrame_OnEvent(event)
 				else
 					logged = nil
 					queried = nil
-					HCDeath:Toast()
+
+          masterTimer.queryTime = 0
+					
+          HCDeath:Toast()
 					return
 				end
 			end
@@ -922,7 +985,7 @@ local function HCDeaths_commands(msg, editbox)
 		if toastMove then
 			toastMove = nil
 			HCDeath:print("hiding toast")
-			HCDeath:hideToast()
+			HCDeathsToast:Hide() -- <-- CORRECT: Only hides the frame, doesn't touch the timer state.
 		else
 			toastMove = true
 			HCDeath:print("showing toast")
@@ -955,7 +1018,7 @@ do
 	local max_width = 205
 	local max_height = 56
   
-	local HCDeathsLog = CreateFrame("Button", "HCDeathsLog", UIParent)
+	
 	HCDeathsLog:Hide()
 
 	HCDeathsLog:SetWidth(max_width-20)
@@ -1264,35 +1327,45 @@ function HCDeath:LogScale()
 	HCDeathsLog:SetScale(HCDeaths_Settings.logscale)
 end
 
-HCDeath:RegisterEvent("ADDON_LOADED")
-HCDeath:SetScript("OnEvent", function()
+function HCDeath:toastMove()
+    -- CRITICAL CHECK: Don't show the move toast if a real death toast is active.
+    if masterTimer.toastActive then return end
+    
+    -- Set the display text for the user to see and move
+    HCDeath.level:SetText("52")
+    HCDeath.name:SetText("Yelo")
+    HCDeath.guild:SetText("<OnlyFangs>")
+    HCDeath.location:SetText("Has died in Un'goro Crater")
+    HCDeath.death:SetText("to Ironhide Devilsaur level 56")
+    HCDeath.lastwords:SetText("dwada")
+
+    -- Set the visuals
+    HCDeath.class:SetTexture(media.."Ring\\".."Druid")
+    HCDeath.race:SetTexture(media.."Ring\\".."Tauren")
+    HCDeath:color(52) -- Apply color scheme
+
+    -- Show the frame
+    HCDeathsToast:Show()
+end
+
+HCDeath_Handler:RegisterEvent("ADDON_LOADED")
+
+HCDeath_Handler:SetScript("OnEvent", function() 
     if event == "ADDON_LOADED" then
-        if not this.loaded then
-            this.loaded = true
+        
+        if not HCDeath.loaded then 
+            HCDeath.loaded = true 
+            
             SLASH_HCDEATHS1 = "/hcdeaths"
             SLASH_HCDEATHS2 = "/hcd"
             SlashCmdList["HCDEATHS"] = HCDeaths_commands
-			HCDeath:ToastScale()
-			HCDeath:ToggleLog()			
-			HCDeath:print("HCDeaths Loaded! /hcdeaths or /hcd")
-		end
-	end
+            
+            HCDeath:ToastScale()
+            HCDeath:ToggleLog()	
+            
+            HCDeath:print("HCDeaths Loaded! /hcdeaths or /hcd")
+        end
+    end
 end)
 
-function HCDeath:toastMove()
-	HCDeath.level:SetText("60")
-	HCDeath.name:SetText("Toast")
-	HCDeath.guild:SetText("<HCDeaths>")
-	HCDeath.location:SetText("Has died in Blackrock Mountains")
-	HCDeath.death:SetText("to Torta level 60")
-	HCDeath.lastwords:SetText('"'.."I like turtles!"..'"')
-	-- HCDeath.quote:SetText("May this sacrifice not be forgotten!")
-	
-	HCDeath:color(60)
-	HCDeath.texture:SetVertexColor(.75,.75,.75)	
-	HCDeath.class:SetTexture(media.."Ring\\".."Warrior")
-	HCDeath.race:SetTexture(media.."Ring\\".."Human")
-	HCDeath:classSize()
-	HCDeath:raceSize()
-	HCDeathsToast:Show()
-end
+
