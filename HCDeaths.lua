@@ -1,4 +1,3 @@
-
 HCDeath = {}
 
 local HCDeath_Handler = CreateFrame("Frame")
@@ -178,14 +177,14 @@ local instances = {
 
 HCDeaths = {}
 HCDeaths_LastWords = {}
-
+deaths = {}
 
 masterTimer = CreateFrame("Frame", "HCDeathsMasterTimer", nil)
 HCDeathsToast = CreateFrame("Button", "HCDeathsToast", UIParent)
 HCDeathsLog = CreateFrame("Button", "HCDeathsLog", UIParent)
 
 local media = "Interface\\Addons\\HCDeaths\\media\\"
-deaths = {}
+
 local queried
 local logged
 local toastMove -- state of toast moving
@@ -587,10 +586,12 @@ function HCDeath:RemovePlayerDeath(name)
 end
 
 function HCDeath:GetWhoInfo(player)
+    local player_lower = string.lower(player)
     local numWhos = GetNumWhoResults()
-	for i=0, numWhos do
+	for i=1, numWhos do
         local name, guild, level, race, class, zone = GetWhoInfo(i)
-		if (name == player) then
+
+		if (string.lower(name) == player_lower) then
 			if guild == "" then
 				return "nil", level, race, class, zone
 			else
@@ -599,77 +600,122 @@ function HCDeath:GetWhoInfo(player)
 		end
 	end
 end
-
 function HCDeath:QueryPlayer()
-	for _, hcdeath in pairs(deaths) do
-		if not hcdeath.playerClass then
-			hcdeath.playerGuild, hcdeath.playerLevel, hcdeath.playerRace, hcdeath.playerClass, hcdeath.zone = HCDeath:GetWhoInfo(hcdeath.playerName)
-			if (hcdeath.deathType ~= "PVP") and hcdeath.playerClass then
-				hcdeath.info = true
-			elseif (hcdeath.deathType == "PVP") and (not hcdeath.killerClass) then
-				HCDeath:whoPlayer(hcdeath.killerName, _, hcdeath.zone)
-				return
-			end
-		end
+    -- Ensure table exists before we try to use it
+    if type(deaths) ~= "table" then return end 
+    
+    print("DEBUG: QueryPlayer Entered Safely.") -- Check 1
 
-		if (hcdeath.deathType == "PVP") and (not hcdeath.killerClass) then
-			hcdeath.killerGuild, hcdeath.killerLevel, hcdeath.killerRace, hcdeath.killerClass = HCDeath:GetWhoInfo(hcdeath.killerName)
-			if hcdeath.killerClass then
-				hcdeath.info = true
-			end
-		end
+    -- 🟢 CRASH-PROOF NUMERIC WHILE LOOP 🟢
+    local i = 1
+    while deaths[i] do
+        local hcdeath = deaths[i]
+        
+        print("DEBUG: Inside QueryPlayer Loop.") -- New Check!
 
-		if hcdeath.info then
-			logged = true
-			local match
-			for _, death in pairs(HCDeaths) do
-				if death.playerName == hcdeath.playerName then
-					match = true
-					break
-				end
-			end
+        -- 🛑 PLAYER WHO CHECK 🛑
+        if not hcdeath.playerClass then
+            if hcdeath.playerName and hcdeath.playerName ~= "" then 
+                local guild, level, race, class, zone = HCDeath:GetWhoInfo(hcdeath.playerName)
+                
+                if class then 
+                    hcdeath.playerGuild = guild
+                    hcdeath.playerLevel = level
+                    hcdeath.playerRace = race
+                    hcdeath.playerClass = class
+                    hcdeath.zone = zone
+                end
+                
+                if (hcdeath.deathType ~= "PVP") and hcdeath.playerClass then
+                    hcdeath.info = true
+                elseif (hcdeath.deathType == "PVP") and (not hcdeath.killerClass) then
+                    if hcdeath.killerName and hcdeath.killerName ~= "" then
+                        HCDeath:whoPlayer(hcdeath.killerName, hcdeath.killerLevel, hcdeath.zone)
+                    end
+                end
+            end
+        end
 
-			hcdeath.lastWords = tostring(HCDeaths_LastWords[hcdeath.playerName])
+        -- 🛑 KILLER WHO CHECK (PVP Only) 🛑
+        if (hcdeath.deathType == "PVP") and (not hcdeath.killerClass) then
+            if hcdeath.killerName and hcdeath.killerName ~= "" then
+                local guild, level, race, class = HCDeath:GetWhoInfo(hcdeath.killerName)
+                
+                if class then
+                    hcdeath.killerGuild = guild
+                    hcdeath.killerLevel = level
+                    hcdeath.killerRace = race
+                    hcdeath.killerClass = class
+                    hcdeath.info = true
+                end
+            end
+        end
 
-			if not match then
-				table.insert(HCDeaths, {
-					sdate = hcdeath.sdate,
-					stime = hcdeath.stime,
-					deathType = hcdeath.deathType,
-					hcType = hcdeath.hcType,
-					zone = hcdeath.zone,
-					lastWords = hcdeath.lastWords,
-					playerName = hcdeath.playerName,
-					playerLevel = hcdeath.playerLevel,
-					playerClass = hcdeath.playerClass,
-					playerRace = hcdeath.playerRace,
-					playerGuild = tostring(hcdeath.playerGuild),
-					killerName = tostring(hcdeath.killerName),
-					killerLevel = tostring(hcdeath.killerLevel),
-					killerClass = tostring(hcdeath.killerClass),
-					killerRace = tostring(hcdeath.killerRace),
-					killerGuild = tostring(hcdeath.killerGuild)
-				})
+        -- 🛑 LOGGING/FLAGGING 🛑
+        if hcdeath.info then
+            if not HCDeaths then HCDeaths = {} end
+            
+            logged = true 
+            
+            local match
+            local j = 1
+            while HCDeaths[j] do
+                if HCDeaths[j].playerName == hcdeath.playerName then
+                    match = true
+                    break
+                end
+                j = j + 1
+            end
 
-				-- HCDeath:print("DEBUG: logged")
-			end
-		end
-	end
+            hcdeath.lastWords = tostring(HCDeaths_LastWords[hcdeath.playerName])
+
+            if not match then
+                table.insert(HCDeaths, {
+                    sdate = hcdeath.sdate,
+                    stime = hcdeath.stime,
+                    deathType = hcdeath.deathType,
+                    hcType = hcdeath.hcType,
+                    zone = hcdeath.zone,
+                    lastWords = hcdeath.lastWords,
+                    playerName = hcdeath.playerName,
+                    playerLevel = hcdeath.playerLevel,
+                    playerClass = hcdeath.playerClass,
+                    playerRace = hcdeath.playerRace,
+                    playerGuild = tostring(hcdeath.playerGuild),
+                    killerName = tostring(hcdeath.killerName),
+                    killerLevel = tostring(hcdeath.killerLevel),
+                    killerClass = tostring(hcdeath.killerClass),
+                    killerRace = tostring(hcdeath.killerRace),
+                    killerGuild = tostring(hcdeath.killerGuild)
+                })
+            end
+        end
+        
+        i = i + 1
+    end
+    
+    print("DEBUG: QueryPlayer Exited Cleanly.")
 end
 
 function HCDeath:SendWho()
 	if not queried then
+    HCDeath:print("DEBUG: Query is NOT active. Proceeding.")
 		for _, hcdeath in pairs(deaths) do
 			if not hcdeath.info then
-        -- 🛑 NEW LINE HERE: Store the name for timeout tracking 🛑
+
+    queried = true
+    masterTimer.queryTime = GetTime()
+          
         masterTimer.currentlyQueryingPlayerName = hcdeath.playerName
-                
-        -- This function will now send the /who query and set 'queried = true'
+       
         HCDeath:whoPlayer(hcdeath.playerName, hcdeath.playerLevel)              
-                			
+        
+        HCDeath:print("DEBUG query initiated for: ".. hcdeath.playerName)
 				break
 			end
 		end
+  else
+      HCDeath:print("DEBUG query is active exiting SendWho")
 	end
 end
 
@@ -684,14 +730,11 @@ function HCDeath:whoPlayer(player, level, zone)
 		filter = "n-"..player
 	end
 
-	if filter then
-		SendWho(filter)
-		queried = true
-
-    -- RESET THE QUERY TIMER ON THE MASTER TIMER:
-    masterTimer.queryTime = 0
-	else
-		queried = nil
+	if filter and SlashCmdList and SlashCmdList["WHO"] then
+		SlashCmdList["WHO"](filter)
+    
+	
+		
 	end
 end
 
@@ -727,178 +770,193 @@ end
 
 local HookChatFrame_OnEvent = ChatFrame_OnEvent
 function ChatFrame_OnEvent(event, arg1)
-	if (event == "CHAT_MSG_SYSTEM") then
-		if testmsg then
-			arg1 = testmsg
-			testmsg = nil
-		end
+    if (event == "CHAT_MSG_SYSTEM") then
+        print("DEBUG: Event Handler Reached.")
+        if testmsg then
+            arg1 = testmsg
+            testmsg = nil
+        end
         local message = tostring(arg1) or ""
+        --message = "A tragedy has occurred. Hardcore character Yelo (level 52) has fallen to Ironhide Devilsaur (level 56) in Un'goro Crater. May this sacrifice not be forgotten."
         local rateLimitMsg = "You have performed that action too many times."
-        local generalFailMsg = "You cannot do that right now." 
+        local generalFailMsg = "You cannot do that right now."
         
         if message == rateLimitMsg or message == generalFailMsg then
             -- This clears the permanent lock when the rate limit is hit
-            queried = nil 
-            masterTimer.queryTime = 0 
+            queried = nil
+            masterTimer.queryTime = 0
             HCDeath:print("Query rate limit hit. Advancing queue.")
         end
       
-    -- Examples of Turtle WoW HC progress messages:
-		-- "PLAYERNAME has reached level 20/30/40/50 in Hardcore mode! Their ascendance towards immortality continues, however, so do the dangers they will face.
-		-- "PLAYERNAME has transcended death and reached level 60 on Hardcore mode without dying once! PLAYERNAME shall henceforth be known as the Immortal!"
+        local _, _, hcprogress = string.find(message, "(%a+) has reached level (%d%d) in Hardcore mode")
+        local _, _, hcimmortal = string.find(message, "(%a+) has transcended death and reached level 60")
+        
+        -- FIX B: Robust Multi-Capture Pattern for PVE Deaths
+        local message_pattern = "A tragedy has occurred%. Hardcore character (.-) %((level %d+)%) has fallen to (.-) %((level %d+)%) in (.-)%. May this sacrifice not be forgotten%."
+        local _, _, deathPlayerName, deathPlayerLevelStr, deathKillerName, deathKillerLevelStr, deathZone = string.find(message, message_pattern)
 
-		-- Examples of Turtle WoW Inferno messages:
-		-- Started = "PLAYERNAME has laughed in the face of death in the Hardcore challenge. PLAYERNAME has begun the Inferno Challenge!"
-		-- PVE (*does not show PLAYERNAME*) = "A tragedy has occurred. Inferno character has fallen to MOBNAME1 MOBNAME2 (level KILLERLEVEL) at level PLAYERLEVEL..."
-		-- NAT = ??
-		-- PVP = ??
+        local _, _, infstart = string.find(message,"(%a+) has begun the Inferno Challenge")
+        local _, _, infdeath = string.find(message,"A tragedy has occurred. Inferno character (%a+)")
 
-		-- Examples of Turtle WoW Hardcore messages:
-		-- PVE = "A tragedy has occurred. Hardcore character PLAYERNAME has fallen to MOBNAME1 MOBNAME2 (level KILLERLEVEL) at level PLAYERLEVEL..."
-		-- NAT = "A tragedy has occurred. Hardcore character PLAYERNAME died of natural causes at level PLAYERLEVEL..."
-		-- PvP = "A tragedy has occurred. Hardcore character PLAYERNAME has fallen in PvP to KILLERNAME at level PLAYERLEVEL..."
+        if hcprogress or hcimmortal then
+            HCDeath:systemMessage(message)
+            
+            local _, _, playerName = string.find(message,"(%a+) has")
+            local _, _, playerLevel = string.find(message,"reached level (%d+)")
 
-		-- Example of /who result messages:
-		-- [PLAYERNAME]: Level PLAYERLEVEL PLAYERRACE PLAYERCLASS <PLAYERGUILD> - AREA
-		-- 1 player Total
+            table.insert(deaths, {
+                sdate = date("!%Y/%m/%d"),
+                stime = date("!%H:%M:%S"),
+                deathType = "LVL",
+                hcType = "HC",
+                zone = nil,
+                playerName = playerName,
+                playerLevel = playerLevel,
+                playerClass = nil,
+                playerRace = nil,
+                playerGuild = nil,
+                info = nil
+            })
 
-		local _, _, hcprogress = string.find(message, "(%a+) has reached level (%d%d) in Hardcore mode")
-		local _, _, hcimmortal = string.find(message, "(%a+) has transcended death and reached level 60")
-		local _, _, hcdeath = string.find(message,"A tragedy has occurred. Hardcore character (%a+)")
-		local _, _, infstart = string.find(message,"(%a+) has begun the Inferno Challenge")
-		-- local _, _, infdeath = string.find(arg1,"A tragedy has occurred. Inferno character (%a+)")
+            HCDeath:SendWho()
+            
+        elseif infstart then
+            HCDeath:systemMessage(message)
+            
+            local _, _, playerName = string.find(message,"(%a+) has")
 
-		if hcprogress or hcimmortal then
-			HCDeath:systemMessage(arg1)
-			
-			local _, _, playerName = string.find(message,"(%a+) has")
-			local _, _, playerLevel = string.find(message,"reached level (%d+)")
+            table.insert(deaths, {
+                sdate = date("!%Y/%m/%d"),
+                stime = date("!%H:%M:%S"),
+                deathType = "INFSTART",
+                hcType = "INF",
+                zone = nil,
+                playerName = playerName,
+                playerLevel = nil,
+                playerClass = nil,
+                playerRace = nil,
+                playerGuild = nil,
+                info = nil
+            })
 
-			table.insert(deaths, {
-				sdate = date("!%Y/%m/%d"),
-				stime = date("!%H:%M:%S"),
-				deathType = "LVL",
-				hcType = "HC",
-				zone = nil,
-				playerName = playerName,
-				playerLevel = playerLevel,
-				playerClass = nil,
-				playerRace = nil,
-				playerGuild = nil,
-				info = nil
-			})
+            HCDeath:SendWho()
+            
+        end -- <--- STRUCTURAL FIX: CLOSES THE 'elseif infstart then' BLOCK
+        
+        if deathPlayerName then -- 🟢 NOW TRIGGERED BY THE NEW ROBUST PATTERN
+            HCDeath:systemMessage(message)
 
-			HCDeath:SendWho()
-			return
-		elseif infstart then
-			HCDeath:systemMessage(arg1)
-			
-			local _, _, playerName = string.find(message,"(%a+) has")
+            local hcType = "HC"
+            local deathType = "PVE" 
+            
+            -- DATA EXTRACTION (Now simplified using the new captured variables)
+            local playerName = deathPlayerName
+            local _, _, playerLevel = string.find(deathPlayerLevelStr or "", "%d+")
+            local _, _, killerLevel = string.find(deathKillerLevelStr or "", "%d+")
+            local killerName = deathKillerName
+            local killerClass = "NPC"
+            local zone = deathZone 
 
-			table.insert(deaths, {
-				sdate = date("!%Y/%m/%d"),
-				stime = date("!%H:%M:%S"),
-				deathType = "INFSTART",
-				hcType = "INF",
-				zone = nil,
-				playerName = playerName,
-				playerLevel = nil,
-				playerClass = nil,
-				playerRace = nil,
-				playerGuild = nil,
-				info = nil
-			})
+            table.insert(deaths, {
+                sdate = date("!%Y/%m/%d"),
+                stime = date("!%H:%M:%S"),
+                deathType = deathType,
+                hcType = hcType,
+                zone = zone,
+                playerName = playerName,
+                playerLevel = playerLevel,
+                playerClass = nil,
+                playerRace = nil,
+                playerGuild = nil,
+                killerName = killerName,
+                killerLevel = killerLevel,
+                killerClass = killerClass,
+                killerRace = nil,
+                killerGuild = nil,
+                lastWords = nil,
+                info = nil
+            })
 
-			HCDeath:SendWho()
-			return
-		elseif hcdeath then --or infdeath then
-			HCDeath:systemMessage(arg1)
+            HCDeath:SendWho()
+            
+        end -- <--- CLOSES THE 'elseif deathPlayerName then' BLOCK
 
-			local hcType = "HC"
-			-- local hcType 
-			-- if hcdeath then
-			-- 	hcType = "HC"
-			-- elseif infdeath then
-			-- 	hcType = "INF"
-			-- end			
+        
+        if queried then
+            local result = nil
+            
+            -- Check 1: Robustly find the player count message
+            local count_match = string.find(message, "player total", 1, true)-- Check for "total" first
+            
+            if not count_match then
+                count_match = string.find(message, "player found", 1, true) -- Check for "found" second
+            end
+            
+            if count_match then
+                result = true
+            end
+            
+            -- Check 2: The secondary check for individual player lines.
+            if not result then
+                local name_match
+                _, _, name_match = string.find(message, "%[(.-)%]")
+                
+                if name_match then
+                    for _, hcdeath in ipairs(deaths) do
+                        if (name_match == hcdeath.playerName) or (name_match == hcdeath.killerName) then
+                            result = true 
+                            break
+                        end                
+                    end
+                end
+            end
+            
+            print("DEBUG: WHO detection finished.")      
 
-			local pvp, natural, playerLevel, deathType, killerName, killerLevel, killerClass
-			_, _, pvp = string.find(message,"(PvP)")
-			_, _, natural = string.find(message,"(natural causes)")
-			_, _, playerLevel = string.find(message,"at level (%d+)")
+            if result then
+                -- This block executes when WHO results are available in the chat log.
+                if not logged then
+                    -- 1. Set flag to prevent looping, then run QueryPlayer
+                    logged = true
+                    HCDeath:QueryPlayer()
+                    
+                    -- 2. Check if QueryPlayer successfully populated the death data (`hcdeath.info` is set in QueryPlayer)
+                    local readyToDisplay = false
 
-			if pvp then 
-				deathType = "PVP"
-				_, _, killerName = string.find(message,"to%s+(%a+)")
-			else
-				deathType = "PVE"
-				if natural then
-					killerName = "Natural Causes"
-					killerClass = "ENV"
-				else
-					_, _, killerName = string.find(message,"to%s+(.-)%s*%(")
-					_, _, killerLevel = string.find(message,"%(level%s*(.-)%).-at")
-					killerClass = "NPC"
-				end
-			end
+                    -- 🛑 FINAL CRITICAL CRASH PROTECTION: Check the type of 'deaths' before iterating 🛑
+                    if type(deaths) == "table" then 
+                        for _, hcdeath in pairs(deaths) do
+                            if hcdeath.info then
+                                readyToDisplay = true
+                                break
+                            end
+                        end
+                    end
+                                       
+                    if readyToDisplay then
+                        -- 3. If data is ready, execute the final actions immediately.
+                        
+                        -- Clean up flags
+                        logged = nil
+                        queried = nil
+                        masterTimer.queryTime = 0
+                        
+                        -- Execute the log/toast functions
+                        print("!!!SUCCESS: TOAST CODE REACHED!!!")
+                        --HCDeath:Toast()
+                        --HCDeath:updateLog()
+                        
+                        return -- Exit the function after completion
+                    end
+                end
+            end-- STRUCTURAL FIX: CLOSES THE MAIN 'if (event == "CHAT_MSG_SYSTEM") then' BLOCK
+        end
+  end
+    if (event == "CHAT_MSG_SAY" or event == "CHAT_MSG_YELL" or event == "CHAT_MSG_GUILD" or event == "CHAT_MSG_PARTY" or event == "CHAT_MSG_RAID" or event == "CHAT_MSG_RAID_LEADER") then
+        HCDeaths_LastWords[arg2] = HCDeath:extractLinks(tostring(arg1) or "")
+    end
 
-			table.insert(deaths, {
-				sdate = date("!%Y/%m/%d"),
-				stime = date("!%H:%M:%S"),
-				deathType = deathType,
-				hcType = hcType,
-				zone = nil,
-				playerName = hcdeath,
-				playerLevel = playerLevel,
-				playerClass = nil,
-				playerRace = nil,
-				playerGuild = nil,
-				killerName = killerName,
-				killerLevel = killerLevel,
-				killerClass = killerClass,
-				killerRace = nil,
-				killerGuild = nil,
-				lastWords = nil,
-				info = nil
-			})
-
-			HCDeath:SendWho()
-			return
-		end
-		
-		if queried then
-			local result
-			_, _, result = string.find(message,"(%d+) player.- total")
-			if not result then
-				_, _, result = string.find(message, "%[(.-)%]")
-				for _, hcdeath in pairs(deaths) do
-					if (result == hcdeath.playerName) or (result == hcdeath.killerName) then
-						break
-					end				
-				end
-			end
-
-			if result then
-				if not logged then
-					HCDeath:QueryPlayer()
-					return
-				else
-					logged = nil
-					queried = nil
-
-          masterTimer.queryTime = 0
-					
-          HCDeath:Toast()
-					return
-				end
-			end
-		end
-   
-	elseif (event == "CHAT_MSG_SAY" or event == "CHAT_MSG_YELL" or event == "CHAT_MSG_GUILD" or event == "CHAT_MSG_PARTY" or event == "CHAT_MSG_RAID" or event == "CHAT_MSG_RAID_LEADER") then
-		HCDeaths_LastWords[arg2] = HCDeath:extractLinks(tostring(arg1) or "")
-	end
-
-	HookChatFrame_OnEvent(event, arg1)
+    HookChatFrame_OnEvent(event, arg1)
 end
 
 function HCDeath:reset()
