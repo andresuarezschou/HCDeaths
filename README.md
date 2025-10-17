@@ -21,4 +21,3 @@ You can reset the toast or log position by holding ctrl and shift and right clic
 
 The original addon was designed to retrieve the information of the fallen player using the /who ingame system.
 Since they limited the search function I found this way to work around it and it can now display consecutive deaths without crashing.
-But it is not logging the level and class on the table.
