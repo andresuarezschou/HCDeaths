@@ -15,6 +15,7 @@ HCDeaths_Settings = {
 	toasttime = 10,
 }
 
+
 local deathsound = {
 	["Dwarf"] = {
 		[1] = "Sound\\Character\\Dwarf\\DwarfFemale\\Emote\\DwarfFemale_Roar01.wav",
@@ -179,15 +180,25 @@ HCDeaths = {}
 HCDeaths_LastWords = {}
 deaths = {}
 
-masterTimer = CreateFrame("Frame", "HCDeathsMasterTimer", nil)
+-- Added master timer system for toast display and WHO query management
+masterTimer = {
+    toastActive = nil,
+    toastEndTime = 0,
+    queryTime = 0,
+    queryDelay = 2
+}
+
+-- Added queried flag to prevent duplicate WHO queries
+queried = nil
+
 HCDeathsToast = CreateFrame("Button", "HCDeathsToast", UIParent)
 HCDeathsLog = CreateFrame("Button", "HCDeathsLog", UIParent)
 
 local media = "Interface\\Addons\\HCDeaths\\media\\"
+local message_pattern = "Hardcore character (.+?) %(level (%d+)%) has fallen to (.+?) %(level (%d+)%) in (.+)%."
 
-local queried
 local logged
-local toastMove -- state of toast moving
+local toastMove
 
 local twidth, theight = 332.8, 166.4
 
@@ -257,12 +268,6 @@ do
 	HCDeath.lastwords:SetWidth(HCDeath.texture:GetWidth())
 	HCDeath.lastwords:SetFont(font, size, outline)
 	HCDeath.lastwords:SetTextColor(.5,.5,.5)
-	
-	-- HCDeath.quote = HCDeathsToast:CreateFontString(nil, "LOW", "GameFontNormal")
-	-- HCDeath.quote:SetPoint("TOP", HCDeath.death, "BOTTOM", 0, -10)
-	-- HCDeath.quote:SetWidth(HCDeath.texture:GetWidth()*1.5)
-	-- HCDeath.quote:Hide()
-	-- HCDeath.quote:SetFont("Fonts\\SKURRI.TTF", size, outline)
 
 	HCDeathsToast:SetMovable(true)
 	HCDeathsToast:SetClampedToScreen(true)
@@ -296,68 +301,6 @@ do
 	end)
 end
 
--- MASTER TIMER BLOCK 
-local masterTimer = masterTimer -- Re-use the alias
-
--- ...-- These local variables can stay, as they are constants:
-local checkInterval = 1.0  -- Check logic every 1.0 seconds
-local queryTimeout = 8.0   -- Safe timeout for the /who query
-
-masterTimer:SetScript("OnUpdate", function(self, elapsed)
-    if not self then return end
-    
-    -- 1. FAST TOAST DECAY (Runs every frame if active)
-    if masterTimer.toastActive then
-        masterTimer.toastEndTime = (masterTimer.toastEndTime or 0) - elapsed
-        
-        if masterTimer.toastEndTime <= 0 then
-            -- This must execute to hide the toast and clear the lock
-            HCDeath:print("Timer expired. Hiding toast.")
-            HCDeath:hideToast()
-
-            masterTimer.toastActive = nil
-        end
-    end
-    
-    -- 2. SLOW ACCUMULATOR & QUERY CHECK (Runs every 1.0 seconds)
-    self.accumulatedTime = (self.accumulatedTime or 0) + (elapsed or 0)
-
-    if self.accumulatedTime >= checkInterval then
-        self.accumulatedTime = self.accumulatedTime - checkInterval
-
-        ---------------------------------------------------
-        -- QUERY TIMEOUT CHECK (Only runs every 1.0 second)
-        ---------------------------------------------------
-        if queried then
-            self.queryTime = (self.queryTime or 0) + checkInterval
-            
-            if self.queryTime >= queryTimeout then
-                HCDeath:print("Who query timed out after 8 seconds. Resetting lock and skipping player.")
-                
-                local timedOutPlayerName = self.currentlyQueryingPlayerName
-                if timedOutPlayerName then
-                    HCDeath:RemoveDeath(timedOutPlayerName)
-                end
-                
-                queried = nil
-                self.queryTime = 0
-                self.currentlyQueryingPlayerName = nil
-            end
-        else
-            self.queryTime = 0
-        end
-        
-        ---------------------------------------------------
-        -- QUEUE ADVANCE CHECK (Only runs every 1.0 second)
-        ---------------------------------------------------
-        -- This logic ensures the next death is processed immediately after the current toast clears.
-        if not self.toastActive and HCDeath:tableLength() > 0 then
-            if not queried then
-                HCDeath:SendWho()
-            end
-        end
-    end -- End of accumulatedTime check
-end)
 
 function HCDeath:classSize()
 	local s = 85
@@ -397,20 +340,14 @@ function HCDeath:texColor(level)
 	HCDeath.texture:SetVertexColor(.75,.75,.75)
 	if HCDeaths_Settings.color then
 		if level == 60 then
-			-- gold
-			-- #ffd700
 			HCDeath.texture:SetVertexColor(255/255, 215/255, 0/255)
 		elseif level >= 50 then
-			-- #e0cc5f
 			HCDeath.texture:SetVertexColor(224/255, 204/255, 95/255)
 		elseif level >= 40 then
-			-- silver
 			HCDeath.texture:SetVertexColor(1,1,1)
 		elseif level >= 30 then
-			-- #b79d8c
 			HCDeath.texture:SetVertexColor(183/255, 157/255, 140/255)
 		elseif level >= 20 then
-			-- #ad7a56
 			HCDeath.texture:SetVertexColor(173/255, 122/255, 86/255)
 		end
 	end
@@ -418,7 +355,7 @@ end
 
 function HCDeath:color(level)
 	HCDeath:texColor(level)
-	HCDeath.guild:SetTextColor(116/255, 113/255, 255/255) -- #7471FF
+	HCDeath.guild:SetTextColor(116/255, 113/255, 255/255)
 end
 
 function HCDeath:sound(deathType, playerRace, playerLevel)
@@ -448,7 +385,7 @@ function HCDeath:sound(deathType, playerRace, playerLevel)
 end
 
 function HCDeath:Toast()
-	if not HCDeaths_Settings.toast then return end --checking settings 1st
+	if not HCDeaths_Settings.toast then return end
     if masterTimer.toastActive then return end
 			for _, hcdeath in pairs(deaths) do
 				if hcdeath.info then
@@ -478,17 +415,13 @@ function HCDeath:Toast()
 						HCDeath.death:SetText("")
 						if level == 60 then
 							HCDeath.location:SetText("Has transcended death and reached level 60!")
-							-- HCDeath.quote:SetText("They shall henceforth be known as the Immortal")
 						else
 							HCDeath.location:SetText("Has reached level "..level.."!")
-							-- HCDeath.quote:SetText("Their ascendance towards immortality continues")
 						end
 					elseif hcdeath.deathType == "INFSTART" then
 						HCDeath.death:SetText("")
 						HCDeath.location:SetText("Has begun the Inferno Challenge!")
 					else
-						-- local locHex = HCDeath:locHex(hcdeath.zone)		
-						-- HCDeath.location:SetText("Has died in ".."|cff"..locHex..hcdeath.zone)
 						HCDeath.location:SetText("Has died in "..hcdeath.zone)
 						HCDeath.name:SetText("|cff"..hex..hcdeath.playerName)
 						if hcdeath.deathType == "PVE" then
@@ -508,8 +441,6 @@ function HCDeath:Toast()
 						else
 							HCDeath.lastwords:SetText("")
 						end
-
-						-- HCDeath.quote:SetText("May this sacrifice not be forgotten!")
 					end				
 					
 					HCDeath:sound(hcdeath.deathType, hcdeath.playerRace, level)					
@@ -518,12 +449,11 @@ function HCDeath:Toast()
 					if (hcdeath.deathType == "PVP" or hcdeath.deathType == "PVE") then
 						HCDeath:updateLog(true)
 					end
-
-          
 					break 
         end
     end      
 end
+
 
 function HCDeath:tableLength()
 	local count = 0
@@ -600,142 +530,55 @@ function HCDeath:GetWhoInfo(player)
 		end
 	end
 end
-function HCDeath:QueryPlayer()
-    -- Ensure table exists before we try to use it
-    if type(deaths) ~= "table" then return end 
+
+-- Added SendWho function to query player information
+function HCDeath:SendWho()
+    if queried then return end
+    if masterTimer.queryTime > 0 then return end
     
-    print("DEBUG: QueryPlayer Entered Safely.") -- Check 1
-
-    -- 🟢 CRASH-PROOF NUMERIC WHILE LOOP 🟢
-    local i = 1
-    while deaths[i] do
-        local hcdeath = deaths[i]
-        
-        print("DEBUG: Inside QueryPlayer Loop.") -- New Check!
-
-        -- 🛑 PLAYER WHO CHECK 🛑
-        if not hcdeath.playerClass then
-            if hcdeath.playerName and hcdeath.playerName ~= "" then 
-                local guild, level, race, class, zone = HCDeath:GetWhoInfo(hcdeath.playerName)
-                
-                if class then 
-                    hcdeath.playerGuild = guild
-                    hcdeath.playerLevel = level
-                    hcdeath.playerRace = race
-                    hcdeath.playerClass = class
-                    hcdeath.zone = zone
-                end
-                
-                if (hcdeath.deathType ~= "PVP") and hcdeath.playerClass then
-                    hcdeath.info = true
-                elseif (hcdeath.deathType == "PVP") and (not hcdeath.killerClass) then
-                    if hcdeath.killerName and hcdeath.killerName ~= "" then
-                        HCDeath:whoPlayer(hcdeath.killerName, hcdeath.killerLevel, hcdeath.zone)
-                    end
-                end
-            end
+    for _, hcdeath in pairs(deaths) do
+        if not hcdeath.info then
+            FriendsFrame:UnregisterEvent("WHO_LIST_UPDATE")
+            SendWho(hcdeath.playerName)
+            queried = hcdeath.playerName
+            masterTimer.queryTime = masterTimer.queryDelay
+            break
         end
+    end
+end
 
-        -- 🛑 KILLER WHO CHECK (PVP Only) 🛑
-        if (hcdeath.deathType == "PVP") and (not hcdeath.killerClass) then
-            if hcdeath.killerName and hcdeath.killerName ~= "" then
-                local guild, level, race, class = HCDeath:GetWhoInfo(hcdeath.killerName)
-                
-                if class then
-                    hcdeath.killerGuild = guild
-                    hcdeath.killerLevel = level
-                    hcdeath.killerRace = race
-                    hcdeath.killerClass = class
-                    hcdeath.info = true
-                end
-            end
-        end
-
-        -- 🛑 LOGGING/FLAGGING 🛑
-        if hcdeath.info then
-            if not HCDeaths then HCDeaths = {} end
+-- Added OnWhoListUpdate to process WHO query results
+function HCDeath:OnWhoListUpdate()
+    if not queried then return end
+    
+    local guild, level, race, class, zone = HCDeath:GetWhoInfo(queried)
+    
+    for _, hcdeath in pairs(deaths) do
+        if hcdeath.playerName == queried then
+            hcdeath.playerGuild = guild or "nil"
+            hcdeath.playerLevel = level or hcdeath.playerLevel
+            hcdeath.playerRace = race or "Human"
+            hcdeath.playerClass = class or "Warrior"
+            hcdeath.zone = zone or hcdeath.zone
+            hcdeath.info = true
             
-            logged = true 
+            if HCDeaths_LastWords[queried] then
+                hcdeath.lastWords = HCDeaths_LastWords[queried]
+            else
+                hcdeath.lastWords = "nil"
+            end
             
-            local match
-            local j = 1
-            while HCDeaths[j] do
-                if HCDeaths[j].playerName == hcdeath.playerName then
-                    match = true
-                    break
-                end
-                j = j + 1
+            if (hcdeath.deathType == "PVP" or hcdeath.deathType == "PVE") then
+                table.insert(HCDeaths, hcdeath)
             end
-
-            hcdeath.lastWords = tostring(HCDeaths_LastWords[hcdeath.playerName])
-
-            if not match then
-                table.insert(HCDeaths, {
-                    sdate = hcdeath.sdate,
-                    stime = hcdeath.stime,
-                    deathType = hcdeath.deathType,
-                    hcType = hcdeath.hcType,
-                    zone = hcdeath.zone,
-                    lastWords = hcdeath.lastWords,
-                    playerName = hcdeath.playerName,
-                    playerLevel = hcdeath.playerLevel,
-                    playerClass = hcdeath.playerClass,
-                    playerRace = hcdeath.playerRace,
-                    playerGuild = tostring(hcdeath.playerGuild),
-                    killerName = tostring(hcdeath.killerName),
-                    killerLevel = tostring(hcdeath.killerLevel),
-                    killerClass = tostring(hcdeath.killerClass),
-                    killerRace = tostring(hcdeath.killerRace),
-                    killerGuild = tostring(hcdeath.killerGuild)
-                })
-            end
+            
+            break
         end
-        
-        i = i + 1
     end
     
-    print("DEBUG: QueryPlayer Exited Cleanly.")
-end
-
-function HCDeath:SendWho()
-	if not queried then
-    HCDeath:print("DEBUG: Query is NOT active. Proceeding.")
-		for _, hcdeath in pairs(deaths) do
-			if not hcdeath.info then
-
-    queried = true
-    masterTimer.queryTime = GetTime()
-          
-        masterTimer.currentlyQueryingPlayerName = hcdeath.playerName
-       
-        HCDeath:whoPlayer(hcdeath.playerName, hcdeath.playerLevel)              
-        
-        HCDeath:print("DEBUG query initiated for: ".. hcdeath.playerName)
-				break
-			end
-		end
-  else
-      HCDeath:print("DEBUG query is active exiting SendWho")
-	end
-end
-
-function HCDeath:whoPlayer(player, level, zone)
-	local filter
-    
-	if player and zone then
-		filter = "n-"..player.." ".."z-"..zone
-	elseif player and level then
-		filter = "n-"..player.." "..level
-	elseif player then
-		filter = "n-"..player
-	end
-
-	if filter and SlashCmdList and SlashCmdList["WHO"] then
-		SlashCmdList["WHO"](filter)
-    
-	
-		
-	end
+    queried = nil
+    FriendsFrame:RegisterEvent("WHO_LIST_UPDATE")
+    HCDeath:Toast()
 end
 
 function HCDeath:systemMessage(message)
@@ -771,18 +614,21 @@ end
 local HookChatFrame_OnEvent = ChatFrame_OnEvent
 function ChatFrame_OnEvent(event, arg1)
     if (event == "CHAT_MSG_SYSTEM") then
-        print("DEBUG: Event Handler Reached.")
         if testmsg then
             arg1 = testmsg
             testmsg = nil
         end
-        local message = tostring(arg1) or ""
-        --message = "A tragedy has occurred. Hardcore character Yelo (level 52) has fallen to Ironhide Devilsaur (level 56) in Un'goro Crater. May this sacrifice not be forgotten."
+        
+        -- Fixed typo and properly capture message from arg1
+        local message = tostring(arg1 or "")
+        
+        print("[HCDeaths] CHAT_MSG_SYSTEM received")
+        print("[HCDeaths] Message: " .. message)
+        
         local rateLimitMsg = "You have performed that action too many times."
         local generalFailMsg = "You cannot do that right now."
         
         if message == rateLimitMsg or message == generalFailMsg then
-            -- This clears the permanent lock when the rate limit is hit
             queried = nil
             masterTimer.queryTime = 0
             HCDeath:print("Query rate limit hit. Advancing queue.")
@@ -791,9 +637,8 @@ function ChatFrame_OnEvent(event, arg1)
         local _, _, hcprogress = string.find(message, "(%a+) has reached level (%d%d) in Hardcore mode")
         local _, _, hcimmortal = string.find(message, "(%a+) has transcended death and reached level 60")
         
-        -- FIX B: Robust Multi-Capture Pattern for PVE Deaths
-        local message_pattern = "A tragedy has occurred%. Hardcore character (.-) %((level %d+)%) has fallen to (.-) %((level %d+)%) in (.-)%. May this sacrifice not be forgotten%."
-        local _, _, deathPlayerName, deathPlayerLevelStr, deathKillerName, deathKillerLevelStr, deathZone = string.find(message, message_pattern)
+        local message_pattern = "A tragedy has occurred%. Hardcore character (.-) %(level (%d+)%) has fallen to (.-) %(level (%d+)%) in (.-)%. May this sacrifice not be forgotten%."
+        local _, _, deathPlayerName, deathPlayerLevel, deathKillerName, deathKillerLevel, deathZone = string.find(message, message_pattern)
 
         local _, _, infstart = string.find(message,"(%a+) has begun the Inferno Challenge")
         local _, _, infdeath = string.find(message,"A tragedy has occurred. Inferno character (%a+)")
@@ -841,18 +686,17 @@ function ChatFrame_OnEvent(event, arg1)
 
             HCDeath:SendWho()
             
-        end -- <--- STRUCTURAL FIX: CLOSES THE 'elseif infstart then' BLOCK
-        
-        if deathPlayerName then -- 🟢 NOW TRIGGERED BY THE NEW ROBUST PATTERN
+        elseif deathPlayerName then
             HCDeath:systemMessage(message)
+
+            print("[HCDeaths] Death detected: " .. tostring(deathPlayerName))
 
             local hcType = "HC"
             local deathType = "PVE" 
             
-            -- DATA EXTRACTION (Now simplified using the new captured variables)
             local playerName = deathPlayerName
-            local _, _, playerLevel = string.find(deathPlayerLevelStr or "", "%d+")
-            local _, _, killerLevel = string.find(deathKillerLevelStr or "", "%d+")
+            local playerLevel = deathPlayerLevel
+            local killerLevel = deathKillerLevel
             local killerName = deathKillerName
             local killerClass = "NPC"
             local zone = deathZone 
@@ -876,88 +720,18 @@ function ChatFrame_OnEvent(event, arg1)
                 lastWords = nil,
                 info = nil
             })
-
+            
             HCDeath:SendWho()
-            
-        end -- <--- CLOSES THE 'elseif deathPlayerName then' BLOCK
-
-        
-        if queried then
-            local result = nil
-            
-            -- Check 1: Robustly find the player count message
-            local count_match = string.find(message, "player total", 1, true)-- Check for "total" first
-            
-            if not count_match then
-                count_match = string.find(message, "player found", 1, true) -- Check for "found" second
-            end
-            
-            if count_match then
-                result = true
-            end
-            
-            -- Check 2: The secondary check for individual player lines.
-            if not result then
-                local name_match
-                _, _, name_match = string.find(message, "%[(.-)%]")
-                
-                if name_match then
-                    for _, hcdeath in ipairs(deaths) do
-                        if (name_match == hcdeath.playerName) or (name_match == hcdeath.killerName) then
-                            result = true 
-                            break
-                        end                
-                    end
-                end
-            end
-            
-            print("DEBUG: WHO detection finished.")      
-
-            if result then
-                -- This block executes when WHO results are available in the chat log.
-                if not logged then
-                    -- 1. Set flag to prevent looping, then run QueryPlayer
-                    logged = true
-                    HCDeath:QueryPlayer()
-                    
-                    -- 2. Check if QueryPlayer successfully populated the death data (`hcdeath.info` is set in QueryPlayer)
-                    local readyToDisplay = false
-
-                    -- 🛑 FINAL CRITICAL CRASH PROTECTION: Check the type of 'deaths' before iterating 🛑
-                    if type(deaths) == "table" then 
-                        for _, hcdeath in pairs(deaths) do
-                            if hcdeath.info then
-                                readyToDisplay = true
-                                break
-                            end
-                        end
-                    end
-                                       
-                    if readyToDisplay then
-                        -- 3. If data is ready, execute the final actions immediately.
-                        
-                        -- Clean up flags
-                        logged = nil
-                        queried = nil
-                        masterTimer.queryTime = 0
-                        
-                        -- Execute the log/toast functions
-                        print("!!!SUCCESS: TOAST CODE REACHED!!!")
-                        --HCDeath:Toast()
-                        --HCDeath:updateLog()
-                        
-                        return -- Exit the function after completion
-                    end
-                end
-            end-- STRUCTURAL FIX: CLOSES THE MAIN 'if (event == "CHAT_MSG_SYSTEM") then' BLOCK
         end
   end
+  
     if (event == "CHAT_MSG_SAY" or event == "CHAT_MSG_YELL" or event == "CHAT_MSG_GUILD" or event == "CHAT_MSG_PARTY" or event == "CHAT_MSG_RAID" or event == "CHAT_MSG_RAID_LEADER") then
         HCDeaths_LastWords[arg2] = HCDeath:extractLinks(tostring(arg1) or "")
     end
 
     HookChatFrame_OnEvent(event, arg1)
 end
+
 
 function HCDeath:reset()
 	HCDeaths_Settings.message = true
@@ -1070,7 +844,7 @@ local function HCDeaths_commands(msg, editbox)
 		if toastMove then
 			toastMove = nil
 			HCDeath:print("hiding toast")
-			HCDeathsToast:Hide() -- <-- CORRECT: Only hides the frame, doesn't touch the timer state.
+			HCDeathsToast:Hide()
 		else
 			toastMove = true
 			HCDeath:print("showing toast")
@@ -1079,9 +853,6 @@ local function HCDeaths_commands(msg, editbox)
     elseif msg == "reset" then
         HCDeath:reset()
 		HCDeath:print("settings reset")
-	-- elseif msg == "test" then
-	-- 	HCDeath:test("pve", "Tents", "10")
-	-- 	HCDeath:test("pvp", "player", "level", "killer")
     else
 		HCDeath:print("commands:")
 		HCDeath:print("/hcd message - toggle system death messages")
@@ -1111,7 +882,6 @@ do
   
 	HCDeathsLog:SetBackdrop({
 	  bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
-	--   edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
 	  edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
 	  tile = true, tileSize = 16, edgeSize = 18,
 	  insets = { left = 5, right = 5, top = 5, bottom = 5 }
@@ -1120,7 +890,6 @@ do
 	HCDeathsLog:SetBackdropBorderColor(.5,.5,.5,1)
   
 	HCDeathsLog.title = HCDeathsLog:CreateFontString(nil, "LOW", "GameFontNormal")
-	-- HCDeathsLog.title:SetPoint("TOPLEFT", HCDeathsLog, "TOPLEFT", 8, -7)
 	HCDeathsLog.title:SetPoint("TOP", HCDeathsLog, "TOP", 0, -7)
 	HCDeathsLog.title:SetText("HCDeaths")
 	HCDeathsLog.title:SetTextColor(1, .5, 0, 1)
@@ -1173,7 +942,6 @@ do
 	HCDeathsLog.name = {}	
 	HCDeathsLog.race = {}
 	HCDeathsLog.class = {}
-	-- HCDeathsLog.guild = {}
 	HCDeathsLog.background = {}
 
 	for i=1, HCDeathsLog.limit do
@@ -1198,10 +966,6 @@ do
 		HCDeathsLog.class[i]:SetWidth(tex)
 		HCDeathsLog.class[i]:SetHeight(tex)
 		HCDeathsLog.class[i]:Hide()
-
-		-- tinsert(HCDeathsLog.guild, HCDeathsLog.container:CreateFontString(nil, "LOW", "GameFontNormal"))
-		-- HCDeathsLog.guild[i]:SetJustifyH("LEFT")
-		-- HCDeathsLog.guild[i]:SetTextColor(116/255, 113/255, 255/255)
 
 		tinsert(HCDeathsLog.background, CreateFrame("Frame",nil,HCDeathsLog.container))		
 		HCDeathsLog.background[i]:SetBackdrop({ bgFile = "Interface\\Tooltips\\UI-Tooltip-Background" })
@@ -1275,7 +1039,6 @@ function HCDeath:updateLog()
 			local name = HCDeathsLog.name[limit]		
 			local race = HCDeathsLog.race[limit]
 			local class = HCDeathsLog.class[limit]
-			-- local guild = HCDeathsLog.guild[limit]
 			local background = HCDeathsLog.background[limit]
 			limit = limit - 1
 
@@ -1284,38 +1047,23 @@ function HCDeath:updateLog()
 			name:SetPoint("TOPLEFT", HCDeathsLog.container, "TOPLEFT", 40, -yoff-2)
 			race:SetPoint("TOPLEFT", HCDeathsLog.container, "TOPLEFT", 135, -yoff)
 			class:SetPoint("TOPLEFT", HCDeathsLog.container, "TOPLEFT", 155, -yoff)		
-			-- guild:SetPoint("TOPLEFT", HCDeathsLog.container, "TOPLEFT", 180, -yoff)
 			
-			-- type
-			-- locTexture
 			local locTex = HCDeath:locTex(hcdeath.deathType, hcdeath.hcType, hcdeath.zone)
 			dtype:SetTexture(locTex)
 			dtype:Show()
 
-			-- level
 			level:SetText(hcdeath.playerLevel)
 
-			-- name
 			local pclass = RAID_CLASS_COLORS[strupper(hcdeath.playerClass)] or { r = .5, g = .5, b = .5 }
 			local classhex = HCDeath:rgbToHex(pclass.r, pclass.g, pclass.b)
 			name:SetText("|cff"..classhex..hcdeath.playerName)
 
-			-- race
 			race:SetTexture(media.."Log\\"..hcdeath.playerRace)
 			race:Show()
 
-			-- class
 			class:SetTexture(media.."Log\\"..hcdeath.playerClass)
 			class:Show()
 
-			-- guild
-			-- if hcdeath.playerGuild ~= "nil" then
-			-- 	guild:SetText("<"..hcdeath.playerGuild..">")
-			-- else
-			-- 	guild:SetText("")
-			-- end
-
-			-- background
 			background:SetPoint("TOPLEFT", dtype, "TOPLEFT")
 			background:SetPoint("BOTTOMRIGHT", class, "BOTTOMRIGHT")
 			if mod(i, 2) == 1 then
@@ -1340,7 +1088,6 @@ function HCDeath:updateLog()
 				end
 
 				local guildhex = HCDeath:rgbToHex(116/255, 113/255, 255/255)
-				-- player			
 				local pname = "|cff"..classhex..hcdeath.playerName.."|r"
 				local pclass = "|cff"..classhex..hcdeath.playerClass.."|r"
 				local pguild = ""
@@ -1356,7 +1103,6 @@ function HCDeath:updateLog()
 					lastwords = NORMAL_FONT_COLOR_CODE..'Their last words were '..GRAY_FONT_COLOR_CODE..'"'..hcdeath.lastWords..'"'..NORMAL_FONT_COLOR_CODE..'.|r'
 				end
 
-				-- killer
 				local kclass = RAID_CLASS_COLORS[strupper(hcdeath.killerClass)] or { r = 1, g = .5, b = 0 }
 				local classhex = HCDeath:rgbToHex(kclass.r, kclass.g, kclass.b)				
 				local kname = "|cff"..classhex..hcdeath.killerName.."|r"
@@ -1376,19 +1122,17 @@ function HCDeath:updateLog()
 						killer = kname
 					end
 				end
-
-				-- tooltip				
+				
 				if not GameTooltip:IsShown() then 
 					GameTooltip:SetOwner(this, ANCHOR_BOTTOMLEFT)
 				end
 				GameTooltip:ClearLines()
 				GameTooltip:AddLine(death.type, death.r, death.g, death.b)
 				GameTooltip:AddLine(pname..pguild..NORMAL_FONT_COLOR_CODE.." the level "..hcdeath.playerLevel.." "..hcdeath.playerRace.." |r"..pclass..NORMAL_FONT_COLOR_CODE.." died in |r"..zone..NORMAL_FONT_COLOR_CODE.." to |r"..killer..NORMAL_FONT_COLOR_CODE..". |r"..lastwords,_,_,_,true)
-				-- GameTooltip:AddLine("Date: "..hcdeath.sdate.." Time: "..hcdeath.stime)
 				GameTooltip:Show()
 			end)
 			
-			yoff = yoff + 15 -- spacing between items
+			yoff = yoff + 15
 			HCDeathsLog.container:SetHeight(75)			
 		
 			if not HCDeathsLog.scrollframe:IsShown() then
@@ -1413,10 +1157,8 @@ function HCDeath:LogScale()
 end
 
 function HCDeath:toastMove()
-    -- CRITICAL CHECK: Don't show the move toast if a real death toast is active.
     if masterTimer.toastActive then return end
     
-    -- Set the display text for the user to see and move
     HCDeath.level:SetText("52")
     HCDeath.name:SetText("Yelo")
     HCDeath.guild:SetText("<OnlyFangs>")
@@ -1424,20 +1166,39 @@ function HCDeath:toastMove()
     HCDeath.death:SetText("to Ironhide Devilsaur level 56")
     HCDeath.lastwords:SetText("dwada")
 
-    -- Set the visuals
     HCDeath.class:SetTexture(media.."Ring\\".."Druid")
     HCDeath.race:SetTexture(media.."Ring\\".."Tauren")
-    HCDeath:color(52) -- Apply color scheme
+    HCDeath:color(52)
 
-    -- Show the frame
     HCDeathsToast:Show()
 end
 
+-- Added OnUpdate frame for timer management
+local timerFrame = CreateFrame("Frame")
+timerFrame:SetScript("OnUpdate", function()
+    local elapsed = arg1
+    
+    if masterTimer.toastActive then
+        masterTimer.toastEndTime = masterTimer.toastEndTime - elapsed
+        if masterTimer.toastEndTime <= 0 then
+            HCDeath:hideToast()
+        end
+    end
+    
+    if masterTimer.queryTime > 0 then
+        masterTimer.queryTime = masterTimer.queryTime - elapsed
+        if masterTimer.queryTime <= 0 then
+            HCDeath:SendWho()
+        end
+    end
+end)
+
 HCDeath_Handler:RegisterEvent("ADDON_LOADED")
+-- Register WHO_LIST_UPDATE event
+HCDeath_Handler:RegisterEvent("WHO_LIST_UPDATE")
 
 HCDeath_Handler:SetScript("OnEvent", function() 
     if event == "ADDON_LOADED" then
-        
         if not HCDeath.loaded then 
             HCDeath.loaded = true 
             
@@ -1450,7 +1211,8 @@ HCDeath_Handler:SetScript("OnEvent", function()
             
             HCDeath:print("HCDeaths Loaded! /hcdeaths or /hcd")
         end
+    -- Handle WHO_LIST_UPDATE event
+    elseif event == "WHO_LIST_UPDATE" then
+        HCDeath:OnWhoListUpdate()
     end
 end)
-
-
